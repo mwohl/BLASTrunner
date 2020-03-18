@@ -2,6 +2,7 @@ import argparse
 import re
 import sys
 import time
+from xml.etree import ElementTree
 
 import backoff
 import requests
@@ -18,6 +19,7 @@ def _check_status(RID):
     response = requests.post(BLAST_QUERY_URL, params=blast_params)
     response_text = response.text
 
+
     status_block = re.search("Status=(.*)\n", response_text)
     if status_block:
         status = status_block.group(1)
@@ -26,20 +28,49 @@ def _check_status(RID):
     return status
 
 #Using RID from search query, send request to retrieve results
-def _fetch_results(RID):
+def fetch_results(RID):
     results = {}
 
     blast_params = {}
     blast_params["CMD"] = "Get"
     blast_params["FORMAT_OBJECT"] = "Alignment"
-    blast_params["FORMAT_TYPE"] = "Tabular"
+    blast_params["FORMAT_TYPE"] = "XML"
     blast_params["RID"] = RID
 
-    response = requests.post(BLAST_QUERY_URL, params=blast_params)
-    response_text = response.text
+    #response = requests.post(BLAST_QUERY_URL, params=blast_params)
+    #response_text = response.text
+    #root = ElementTree.fromstring(response_text)
 
-    import pdb;pdb.set_trace()
+    root = ElementTree.parse("results.xml").getroot()
 
+    queries = []
+    hits = []
+    hsps = []
+
+    for BlastOutput_iteration in root.findall("BlastOutput_iterations"):
+        for iteration in BlastOutput_iteration.findall("Iteration"):
+            query_data = {}
+            query_data["queryID"] = iteration.find("Iteration_query-ID").text
+            query_data["queryDef"] = iteration.find("Iteration_query-def").text
+            query_data["queryLength"] = int(iteration.find("Iteration_query-len").text)
+            queries.append(query_data)
+
+            for hit in iteration.findall("Iteration_hits/Hit"):
+                hit_data = {}
+                hit_data["hitID"] = hit.find("Hit_id").text
+                hit_data["hitDef"] = hit.find("Hit_def").text
+                hit_data["accession"] = hit.find("Hit_accession").text
+                hits.append(hit_data)
+
+                for hsp in hit.findall("Hit_hsps/Hsp"):
+                    hsp_data = {}
+                    hsp_data["alignmentLength"] = int(hsp.find("Hsp_align-len").text)
+                    hsp_data["bitScore"] = float(hsp.find("Hsp_bit-score").text)
+                    hsp_data["eValue"] = float(hsp.find("Hsp_evalue").text)
+                    hsp_data["gaps"] = int(hsp.find("Hsp_gaps").text)
+                    hsp_data["percentID"] = 100*(hsp_data["alignmentLength"]/query_data["queryLength"])
+                    hsps.append(hsp_data)
+            
     return results
 
 #Using input fasta_file, send search request to web BLAST
@@ -96,9 +127,14 @@ def query_blast(fasta_file):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input_file", help="Path to the fasta file to be used to query NCBI BLAST")
+    parser.add_argument("-f", "--fetch_results", help="Fetch results for search with input RID")
     #parser.add_argument("-d", "--blast_database", default="nr", help="Which BLAST database to query, default is nr")
     args = parser.parse_args()
     if args.input_file:
         #print("Querying NCBI BLAST {} database using fasta file {}".format(args.blast_database, args.input_file))
         print("Performing web blastp query against nr database with fasta file {}".format(args.input_file))
         query_blast(args.input_file)
+    if args.fetch_results:
+        print("Fetching results for RID {}".format(args.fetch_results))
+        fetch_results(args.fetch_results)
+    
