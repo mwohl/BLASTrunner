@@ -9,6 +9,8 @@ import requests
 
 BLAST_QUERY_URL = "https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi"
 
+
+
 @backoff.on_predicate(backoff.fibo, lambda status: status == "WAITING", max_value=60)
 def _check_status(RID):
     blast_params = {}
@@ -49,28 +51,36 @@ def fetch_results(RID):
 
     for BlastOutput_iteration in root.findall("BlastOutput_iterations"):
         for iteration in BlastOutput_iteration.findall("Iteration"):
-            query_data = {}
-            query_data["queryID"] = iteration.find("Iteration_query-ID").text
-            query_data["queryDef"] = iteration.find("Iteration_query-def").text
-            query_data["queryLength"] = int(iteration.find("Iteration_query-len").text)
+            # build a tuple consisting of (queryID, queryDef, queryLength)
+            query_data = (
+                iteration.find("Iteration_query-ID").text,
+                iteration.find("Iteration_query-def").text,
+                int(iteration.find("Iteration_query-len").text)
+            )
             queries.append(query_data)
 
             for hit in iteration.findall("Iteration_hits/Hit"):
-                hit_data = {}
-                hit_data["hitID"] = hit.find("Hit_id").text
-                hit_data["hitDef"] = hit.find("Hit_def").text
-                hit_data["accession"] = hit.find("Hit_accession").text
+                # build a tuple consisting of (hitID, hitDef, accession, queryID)
+                hit_data = (
+                    hit.find("Hit_id").text,
+                    hit.find("Hit_def").text,
+                    hit.find("Hit_accession").text,
+                    iteration.find("Iteration_query-ID").text
+                )
                 hits.append(hit_data)
 
                 for hsp in hit.findall("Hit_hsps/Hsp"):
-                    hsp_data = {}
-                    hsp_data["alignmentLength"] = int(hsp.find("Hsp_align-len").text)
-                    hsp_data["bitScore"] = float(hsp.find("Hsp_bit-score").text)
-                    hsp_data["eValue"] = float(hsp.find("Hsp_evalue").text)
-                    hsp_data["gaps"] = int(hsp.find("Hsp_gaps").text)
-                    hsp_data["percentID"] = 100*(hsp_data["alignmentLength"]/query_data["queryLength"])
+                    # build a tuple consisting of (alignmentLength, bitScore, eValue, gaps, percentID, hitID)
+                    hsp_data = (
+                        int(hsp.find("Hsp_align-len").text),
+                        float(hsp.find("Hsp_bit-score").text),
+                        float(hsp.find("Hsp_evalue").text),
+                        int(hsp.find("Hsp_gaps").text),
+                        100*(int(hsp.find("Hsp_align-len").text)/int(iteration.find("Iteration_query-len").text)),
+                        hit.find("Hit_id").text
+                    )
                     hsps.append(hsp_data)
-            
+
     return results
 
 #Using input fasta_file, send search request to web BLAST
