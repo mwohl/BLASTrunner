@@ -60,7 +60,7 @@ def _check_status(RID):
     status_block = re.search("Status=(.*)\n", response_text)
     if status_block:
         status = status_block.group(1)
-        print("Status = " + status)
+        print(status + "...")
 
     return status
 
@@ -81,11 +81,10 @@ def _fetch_results(RID):
     blast_params["FORMAT_TYPE"] = "XML"
     blast_params["RID"] = RID
 
-    # TODO uncomment real request code here and remove static response from file
-    # response = requests.post(BLAST_QUERY_URL, params=blast_params)
-    # response_text = response.text
-    # root = ElementTree.fromstring(response_text)
-    root = ElementTree.parse("results.xml").getroot()
+    response = requests.post(BLAST_QUERY_URL, params=blast_params)
+    response_text = response.text
+    root = ElementTree.fromstring(response_text)
+    # root = ElementTree.parse("results.xml").getroot()
 
     return root
 
@@ -145,18 +144,18 @@ def _parse_xml_results(root):
     return queries, hits, hsps
 
 
-def _initialize_database():
+def _initialize_database(db_name):
     """
     Create a SQLite database named blastresults.db containing queries, hits, and hsps tables
 
     Parameters:
-        (None)
+        db_name (str): Name of output SQLite database
     
     Returns:
         bool: True on success, or prints an error and exits the program on Exception
     """
     try:
-        conn = sqlite3.connect("blastresults.db")
+        conn = sqlite3.connect(db_name)
 
         for create in CREATE_STATEMENTS:
             conn.execute(create)
@@ -171,11 +170,12 @@ def _initialize_database():
     return True
 
 
-def _load_results_into_database(result_data, db_table):
+def _load_results_into_database(db_name, result_data, db_table):
     """
     Load a dataset into the specified table in SQLite database
 
     Parameters
+        db_name (str): Name of output SQLite database
         result_data (list): A list of tuples, each containing a result row to insert into database
         db_table (str): name of database table into which result_data should be inserted
 
@@ -184,7 +184,7 @@ def _load_results_into_database(result_data, db_table):
         
     """
     try:
-        conn = sqlite3.connect("blastresults.db")
+        conn = sqlite3.connect(db_name)
 
         conn.executemany(INSERTS[db_table], result_data)
 
@@ -200,90 +200,84 @@ def _load_results_into_database(result_data, db_table):
 
 # Using input fasta_file, send search request to web BLAST
 # If search returns results, fetch them and insert into SQLite db
-def run_blast(fasta_file):
+def run_blast(fasta_file, output_db_name):
     """TODO add docstring here"""
-    # blast_params = {}
-    # blast_params["CMD"] = "Put"
-    # blast_params["DATABASE"] = "nr"
-    # blast_params["PROGRAM"] = "blastn"
+    blast_params = {}
+    blast_params["CMD"] = "Put"
+    blast_params["DATABASE"] = "nr"
+    blast_params["PROGRAM"] = "blastn"
 
-    # with open(fasta_file, "r") as seq:
-    #     blast_params["QUERY"] = seq.read()
-    #     print(blast_params["QUERY"])
+    with open(fasta_file, "r") as seq:
+        blast_params["QUERY"] = seq.read()
 
-    # response = requests.post(BLAST_QUERY_URL, params=blast_params)
-    # response_text = response.text
+    response = requests.post(BLAST_QUERY_URL, params=blast_params)
+    response_text = response.text
+    print("Query submitted to web BLAST:")
 
-    # rid_block = re.search("RID = (.*)\n", response_text)
-    # if rid_block:
-    #     RID = rid_block.group(1)
-    #     print("RID = " + RID)
-    # if not RID:
-    #     print("Something went wrong. Please try search again.")
-    #     sys.exit(1)
+    rid_block = re.search("RID = (.*)\n", response_text)
+    if rid_block:
+        RID = rid_block.group(1)
+        print("RID = " + RID)
+    if not RID:
+        print("Something went wrong. Please try search again.")
+        sys.exit(1)
 
-    # rtoe_block = re.search("RTOE = (.*)\n", response_text)
-    # if rtoe_block:
-    #     RTOE = int(rtoe_block.group(1))
-    #     print("RTOE = " + str(RTOE) + " seconds")
+    rtoe_block = re.search("RTOE = (.*)\n", response_text)
+    if rtoe_block:
+        RTOE = int(rtoe_block.group(1))
+        print("RTOE = " + str(RTOE) + " seconds")
 
-    # if RTOE:
-    #     print("Sleeping for {} seconds while awaiting results...".format(RTOE))
-    #     time.sleep(RTOE)
+    if RTOE:
+        print("Sleeping for {} seconds while awaiting results...".format(RTOE))
+        time.sleep(RTOE)
 
-    # print("Checking status of web blast search {}".format(RID))
-    # status = _check_status(RID)
-    # print(status)
+    print("Checking status of web BLAST search: RID {}".format(RID))
+    status = _check_status(RID)
+    print(status + "!")
 
-    # if status == "FAILED":
-    #     print("Web blast search {} failed.".format(RID))
-    #     print("Report error at https://support.nlm.nih.gov/support/create-case/")
-    #     sys.exit(1)
-    # if status == "UNKNOWN":
-    #     print("Web blast search {} has expired; try re-running a new search.".format(RID))
-    #     sys.exit(1)
-    # if status == "READY":
-    #     print("Search complete; Retrieving results...")
-    RID = "123ABC"
+    if status == "FAILED":
+        print("Web blast search {} failed.".format(RID))
+        print("Report error at https://support.nlm.nih.gov/support/create-case/")
+        sys.exit(1)
+    if status == "UNKNOWN":
+        print("Web blast search {} has expired; try re-running a new search.".format(RID))
+        sys.exit(1)
+    if status == "READY":
+        print("Retrieving results...")
+
     root = _fetch_results(RID)
     queries, hits, hsps = _parse_xml_results(root)
 
     # Initialize the SQLite database
-    if _initialize_database():
-        print("initialized the database")
+    if _initialize_database(output_db_name):
+        print("Initialized SQLite database")
 
     # Load BLAST results into SQLite database
-    if _load_results_into_database(queries, "queries"):
-        print("loaded queries into database")
+    if _load_results_into_database(output_db_name, queries, "queries"):
+        print("Loaded query data into database")
 
-    if _load_results_into_database(hits, "hits"):
-        print("loaded hits into database")
+    if _load_results_into_database(output_db_name, hits, "hits"):
+        print("Loaded hit data into database")
 
-    if _load_results_into_database(hsps, "hsps"):
-        print("loaded hsps into database")
+    if _load_results_into_database(output_db_name, hsps, "hsps"):
+        print("Loaded hsp data into database")
 
-    print("Successfully loaded BLAST results into SQLite database.")
+    print("Successfully loaded BLAST results into SQLite database!")
+    print("See README for help with querying local results database")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("input_file", help="Path to the fasta file to be used to query NCBI BLAST")
     parser.add_argument(
-        "-i", "--input_file", help="Path to the fasta file to be used to query NCBI BLAST"
+        "-o", "--output_db_name", default="blastresults.db", help="name for local results database"
     )
-
-    # TODO remove extra arg used for development
-    parser.add_argument("-f", "--fetch_results")
 
     args = parser.parse_args()
     if args.input_file:
         print(
-            "Performing web blastp query against nr database with fasta file {}".format(
+            "Performing web BLAST blastn query against nr database with fasta file {}".format(
                 args.input_file
             )
         )
-        run_blast(args.input_file)
-
-    # TODO remove extra arg used for development
-    if args.fetch_results:
-        print("Fetching results for RID {}".format(args.fetch_results))
-        _fetch_results(args.fetch_results)
+        run_blast(args.input_file, args.output_db_name)
