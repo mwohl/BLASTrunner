@@ -8,6 +8,8 @@ from xml.etree import ElementTree
 import backoff
 import requests
 
+
+# Set global variables
 BLAST_QUERY_URL = "https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi"
 
 CREATE_QUERIES_TABLE = (
@@ -36,56 +38,42 @@ INSERTS = {
 }
 
 
-def _initialize_database():
+@backoff.on_predicate(backoff.fibo, lambda status: status == "WAITING", max_value=60)
+def _check_status(RID):
+    """Check the status of a query submitted to web BLAST using query's RID. Backoff/retry
+    while status equals 'WAITING'.
+
+    Parameters
+        RID (str): the RID of the query for which to perform status check
+    
+    Returns
+        status (str): query status reported by BLAST ("WAITING", "FAILED", "UNKNOWN", or "READY")
     """
-    TODO add docstring
-    """
-    try:
-        conn = sqlite3.connect("blastresults.db")
-        conn.set_trace_callback(print)
+    blast_params = {}
+    blast_params["CMD"] = "Get"
+    blast_params["FORMAT_OBJECT"] = "SearchInfo"
+    blast_params["RID"] = RID
 
-        for create in CREATE_STATEMENTS:
-            conn.execute(create)
+    response = requests.post(BLAST_QUERY_URL, params=blast_params)
+    response_text = response.text
 
-        conn.commit()
-        conn.close()
-    except Exception:
-        print("An error occurred when trying to initialize the SQLite database.")
-        sys.exit(1)
+    status_block = re.search("Status=(.*)\n", response_text)
+    if status_block:
+        status = status_block.group(1)
+        print("Status = " + status)
 
-    return True
-
-
-def _load_results_into_database(result_data, db_table):
-    """
-    TODO add docstring
-    """
-    try:
-        conn = sqlite3.connect("blastresults.db")
-
-        conn.executemany(INSERTS[db_table], result_data)
-
-        conn.commit()
-        conn.close()
-    except Exception:
-        print("An error occurred when trying to insert data into the {} table".format(db_table))
-        sys.exit(1)
-
-    return True
+    return status
 
 
 def _fetch_results(RID):
-    """Use RID from search query to retrieve results from web blast
-    and parse returned XML into data structures for later insertion into
-    SQLite results database.
+    """Use RID from search query to retrieve results from web BLAST
+    and convert response text to XML ElementTree object format.
 
-    Arg:
+    Parameters:
         RID (str): RID to identify search query from which to retrieve results
 
     Returns:
-        queries (list): a list of tuples containing information about each query performed
-        hits (list): a list of tuples containing information about each hit returned from BLAST
-        hsps (list): a list of tuples contianing information about each hsp returned from BLAST
+        root (obj of class xml.etree.ElementTree): ElementTree object representing full XML data
     """
     blast_params = {}
     blast_params["CMD"] = "Get"
@@ -93,11 +81,26 @@ def _fetch_results(RID):
     blast_params["FORMAT_TYPE"] = "XML"
     blast_params["RID"] = RID
 
+    # TODO uncomment real request code here and remove static response from file
     # response = requests.post(BLAST_QUERY_URL, params=blast_params)
     # response_text = response.text
     # root = ElementTree.fromstring(response_text)
     root = ElementTree.parse("results.xml").getroot()
 
+    return root
+
+
+def _parse_xml_results(root):
+    """Parse the XML results fetched from BLAST into data structures for insertion into database
+
+    Parameters:
+        root (obj of class xml.etree.ElementTree): ElementTree object representing full XML data
+    
+    Returns:
+        queries (list): a list of tuples containing information about each query performed
+        hits (list): a list of tuples containing information about each hit returned from BLAST
+        hsps (list): a list of tuples containing information about each hsp returned from BLAST
+    """
     queries = []
     hits = []
     hsps = []
@@ -142,29 +145,62 @@ def _fetch_results(RID):
     return queries, hits, hsps
 
 
-@backoff.on_predicate(backoff.fibo, lambda status: status == "WAITING", max_value=60)
-def _check_status(RID):
-    """TODO add docstring here
+def _initialize_database():
     """
-    blast_params = {}
-    blast_params["CMD"] = "Get"
-    blast_params["FORMAT_OBJECT"] = "SearchInfo"
-    blast_params["RID"] = RID
+    Create a SQLite database named blastresults.db containing queries, hits, and hsps tables
 
-    response = requests.post(BLAST_QUERY_URL, params=blast_params)
-    response_text = response.text
+    Parameters:
+        (None)
+    
+    Returns:
+        bool: True on success, or prints an error and exits the program on Exception
+    """
+    try:
+        conn = sqlite3.connect("blastresults.db")
 
-    status_block = re.search("Status=(.*)\n", response_text)
-    if status_block:
-        status = status_block.group(1)
-        print("Status = " + status)
+        for create in CREATE_STATEMENTS:
+            conn.execute(create)
 
-    return status
+        conn.commit()
+        conn.close()
+
+    except Exception:
+        print("An error occurred when trying to initialize the SQLite database.")
+        sys.exit(1)
+
+    return True
+
+
+def _load_results_into_database(result_data, db_table):
+    """
+    Load a dataset into the specified table in SQLite database
+
+    Parameters
+        result_data (list): A list of tuples, each containing a result row to insert into database
+        db_table (str): name of database table into which result_data should be inserted
+
+    Returns
+        bool: True on success, or prints an error and exits the program on Exception
+        
+    """
+    try:
+        conn = sqlite3.connect("blastresults.db")
+
+        conn.executemany(INSERTS[db_table], result_data)
+
+        conn.commit()
+        conn.close()
+
+    except Exception:
+        print("An error occurred when trying to insert data into the {} table".format(db_table))
+        sys.exit(1)
+
+    return True
 
 
 # Using input fasta_file, send search request to web BLAST
 # If search returns results, fetch them and insert into SQLite db
-def query_blast(fasta_file):
+def run_blast(fasta_file):
     """TODO add docstring here"""
     # blast_params = {}
     # blast_params["CMD"] = "Put"
@@ -209,7 +245,8 @@ def query_blast(fasta_file):
     # if status == "READY":
     #     print("Search complete; Retrieving results...")
     RID = "123ABC"
-    queries, hits, hsps = _fetch_results(RID)
+    root = _fetch_results(RID)
+    queries, hits, hsps = _parse_xml_results(root)
 
     # Initialize the SQLite database
     if _initialize_database():
@@ -233,10 +270,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "-i", "--input_file", help="Path to the fasta file to be used to query NCBI BLAST"
     )
-    parser.add_argument("-f", "--fetch_results", help="Fetch results for search with input RID")
-    parser.add_argument(
-        "-d", "--blast_database", default="nr", help="Which BLAST database to query, default is nr"
-    )
+
+    # TODO remove extra arg used for development
+    parser.add_argument("-f", "--fetch_results")
+
     args = parser.parse_args()
     if args.input_file:
         print(
@@ -244,7 +281,9 @@ if __name__ == "__main__":
                 args.input_file
             )
         )
-        query_blast(args.input_file)
+        run_blast(args.input_file)
+
+    # TODO remove extra arg used for development
     if args.fetch_results:
         print("Fetching results for RID {}".format(args.fetch_results))
-        fetch_results(args.fetch_results)
+        _fetch_results(args.fetch_results)
