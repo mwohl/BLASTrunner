@@ -2087,7 +2087,9 @@ expected_hsps = [
 class TestBLASTrunner(unittest.TestCase):
     def test_parse_xml_results(self):
         root = ElementTree.parse("test.xml").getroot()
-        self.assertEqual(_parse_xml_results(root), (expected_queries, expected_hits, expected_hsps))
+        expected = expected_queries, expected_hits, expected_hsps
+        actual = _parse_xml_results(root)
+        self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":
