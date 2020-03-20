@@ -38,6 +38,56 @@ INSERTS = {
 }
 
 
+def _submit_query(fasta_file):
+    """Build query using input fasta file and submit to web BLAST to run blastn against nr database
+
+    Parameters
+        fasta_file (str): fasta file to use for querying web BLAST
+
+    Returns
+        response_text (str): response text from the query request
+    """
+    blast_params = {}
+    blast_params["CMD"] = "Put"
+    blast_params["DATABASE"] = "nr"
+    blast_params["PROGRAM"] = "blastn"
+
+    with open(fasta_file, "r") as seq:
+        blast_params["QUERY"] = seq.read()
+
+    response = requests.post(BLAST_QUERY_URL, params=blast_params)
+    response_text = response.text
+    print("Query submitted to web BLAST:")
+
+    return response_text
+
+
+def _parse_RID_RTOE(response_text):
+    """Parse out the Request ID (RID) and RTOE from the response received from web BLAST upon query submission
+
+    Parameters:
+        response_text (str): response text from the query request
+
+    Returns:
+        RID (str): RID of the query submitted to web BLAST
+        RTOE (int): estimated time until search is completed, in seconds
+    """
+    rid_block = re.search("RID = (.*)\n", response_text)
+    if rid_block:
+        RID = rid_block.group(1)
+        print("RID = " + RID)
+    else:
+        RID = ""
+
+    rtoe_block = re.search("RTOE = (.*)\n", response_text)
+    if rtoe_block:
+        RTOE = int(rtoe_block.group(1))
+        print("RTOE = " + str(RTOE) + " seconds")
+    else:
+        RTOE = 0
+    return RID, RTOE
+
+
 @backoff.on_predicate(backoff.fibo, lambda status: status == "WAITING", max_value=60)
 def _check_status(RID):
     """Check the status of a query submitted to web BLAST using query's RID. Backoff/retry
@@ -146,7 +196,7 @@ def _parse_xml_results(root):
 
 def _initialize_database(db_name):
     """
-    Create a SQLite database named blastresults.db containing queries, hits, and hsps tables
+    Create a SQLite database containing queries, hits, and hsps tables
 
     Parameters:
         db_name (str): Name of output SQLite database
@@ -201,46 +251,39 @@ def _load_results_into_database(db_name, result_data, db_table):
 # Using input fasta_file, send search request to web BLAST
 # If search returns results, fetch them and insert into SQLite db
 def run_blast(fasta_file, output_db_name):
-    """TODO add docstring here"""
-    blast_params = {}
-    blast_params["CMD"] = "Put"
-    blast_params["DATABASE"] = "nr"
-    blast_params["PROGRAM"] = "blastn"
+    """Procedure for BLASTrunner
+        - queries web BLAST with input fasta file
+        - fetches results in XML format when ready
+        - parses XML results
+        - initializes SQLite database
+        - inserts results (queries, hits, and hsps) into SQLite database
 
-    with open(fasta_file, "r") as seq:
-        blast_params["QUERY"] = seq.read()
+    Parameters
+        fasta_file (str): fasta file to use for querying web BLAST
+        output_db_name (str): name for local results database
+    
+    Returns
+        None
+    """
+    response_text = _submit_query(fasta_file)
 
-    response = requests.post(BLAST_QUERY_URL, params=blast_params)
-    response_text = response.text
-    print("Query submitted to web BLAST:")
-
-    rid_block = re.search("RID = (.*)\n", response_text)
-    if rid_block:
-        RID = rid_block.group(1)
-        print("RID = " + RID)
+    RID, RTOE = _parse_RID_RTOE(response_text)
     if not RID:
         print("Something went wrong. Please try search again.")
         sys.exit(1)
-
-    rtoe_block = re.search("RTOE = (.*)\n", response_text)
-    if rtoe_block:
-        RTOE = int(rtoe_block.group(1))
-        print("RTOE = " + str(RTOE) + " seconds")
-
     if RTOE:
         print("Sleeping for {} seconds while awaiting results...".format(RTOE))
         time.sleep(RTOE)
 
     print("Checking status of web BLAST search: RID {}".format(RID))
     status = _check_status(RID)
-    print(status + "!")
 
     if status == "FAILED":
-        print("Web blast search {} failed.".format(RID))
+        print("Web BLAST search {} failed.".format(RID))
         print("Report error at https://support.nlm.nih.gov/support/create-case/")
         sys.exit(1)
     if status == "UNKNOWN":
-        print("Web blast search {} has expired; try re-running a new search.".format(RID))
+        print("Web BLAST search {} has expired; try re-running a new search.".format(RID))
         sys.exit(1)
     if status == "READY":
         print("Retrieving results...")
@@ -248,11 +291,9 @@ def run_blast(fasta_file, output_db_name):
     root = _fetch_results(RID)
     queries, hits, hsps = _parse_xml_results(root)
 
-    # Initialize the SQLite database
     if _initialize_database(output_db_name):
         print("Initialized SQLite database")
 
-    # Load BLAST results into SQLite database
     if _load_results_into_database(output_db_name, queries, "queries"):
         print("Loaded query data into database")
 
