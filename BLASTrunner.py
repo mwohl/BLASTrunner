@@ -95,7 +95,7 @@ def _check_status(RID):
 
     Parameters
         RID (str): the RID of the query for which to perform status check
-    
+
     Returns
         status (str): query status reported by BLAST ("WAITING", "FAILED", "UNKNOWN", or "READY")
     """
@@ -134,7 +134,6 @@ def _fetch_results(RID):
     response = requests.post(BLAST_QUERY_URL, params=blast_params)
     response_text = response.text
     root = ElementTree.fromstring(response_text)
-    # root = ElementTree.parse("results.xml").getroot()
 
     return root
 
@@ -144,7 +143,7 @@ def _parse_xml_results(root):
 
     Parameters:
         root (obj of class xml.etree.ElementTree): ElementTree object representing full XML data
-    
+
     Returns:
         queries (list): a list of tuples containing information about each query performed
         hits (list): a list of tuples containing information about each hit returned from BLAST
@@ -200,7 +199,7 @@ def _initialize_database(db_name):
 
     Parameters:
         db_name (str): Name of output SQLite database
-    
+
     Returns:
         bool: True on success, or prints an error and exits the program on Exception
     """
@@ -231,7 +230,7 @@ def _load_results_into_database(db_name, result_data, db_table):
 
     Returns
         bool: True on success, or prints an error and exits the program on Exception
-        
+
     """
     try:
         conn = sqlite3.connect(db_name)
@@ -248,8 +247,6 @@ def _load_results_into_database(db_name, result_data, db_table):
     return True
 
 
-# Using input fasta_file, send search request to web BLAST
-# If search returns results, fetch them and insert into SQLite db
 def run_blast(fasta_file, output_db_name):
     """Procedure for BLASTrunner
         - queries web BLAST with input fasta file
@@ -261,7 +258,7 @@ def run_blast(fasta_file, output_db_name):
     Parameters
         fasta_file (str): fasta file to use for querying web BLAST
         output_db_name (str): name for local results database
-    
+
     Returns
         None
     """
